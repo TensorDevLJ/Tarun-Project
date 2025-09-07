@@ -1,0 +1,15 @@
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+
+# Build outputs
+dist/
+build/
+
+# Logs
+*.log
+
+# Uploaded files (if you don't want to push uploads)
+uploads/
