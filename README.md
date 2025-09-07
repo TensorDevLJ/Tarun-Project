@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # JNTUGV Certification System
 
 This is a **full-stack certification registration system** built with
@@ -105,3 +106,6 @@ Frontend runs on <http://localhost:5173>.
 -   Enhance Admin Dashboard UI.
 
 ------------------------------------------------------------------------
+=======
+# Tarun-Project
+>>>>>>> a1b21f29c8d4a437989ad4dd380e9470b4b5efb9
