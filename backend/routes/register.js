@@ -1,31 +1,40 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
-const path = require('path');
 const Registration = require('../models/Registration');
+const { upload } = require('../services/s3Service');
+const { sendRegistrationConfirmation } = require('../services/emailService');
+const { registrationValidation, handleValidationErrors } = require('../middleware/validation');
+const verifyRecaptcha = require('../middleware/recaptcha');
 
-// Storage configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, path.join(__dirname, '..', 'uploads')),
-  filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
-});
-
-const upload = multer({ storage });
-
-// Use upload.fields for multiple files
+// Configure multer for multiple files
 const multi = upload.fields([
   { name: 'paymentReceipt', maxCount: 1 },
   { name: 'applicationForm', maxCount: 1 }
 ]);
 
-router.post('/', (req, res) => {
+router.post('/', registrationValidation, handleValidationErrors, verifyRecaptcha, (req, res) => {
   multi(req, res, async (err) => {
-    if (err) return res.status(500).json({ success: false, message: 'Upload error' });
+    if (err) {
+      console.error('Upload error:', err);
+      return res.status(500).json({ 
+        success: false, 
+        message: err.message || 'File upload error' 
+      });
+    }
 
     try {
       const data = req.body;
 
-      // Create a new registration object
+      // Check if email already exists
+      const existingRegistration = await Registration.findOne({ email: data.email });
+      if (existingRegistration) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email already registered. Please use a different email address.'
+        });
+      }
+
+      // Create registration object
       const reg = new Registration({
         fullName: data.fullName,
         gender: data.gender,
@@ -38,15 +47,26 @@ router.post('/', (req, res) => {
         course: data.course,
         paymentDate: data.paymentDate,
         paymentRef: data.paymentRef,
-        paymentReceipt: req.files?.paymentReceipt?.[0]?.filename || '',
-        applicationForm: req.files?.applicationForm?.[0]?.filename || ''
+        paymentReceiptPath: req.files?.paymentReceipt?.[0]?.location || '',
+        applicationFormPath: req.files?.applicationForm?.[0]?.location || ''
       });
 
       await reg.save();
 
+      // Send confirmation email
+      try {
+        await sendRegistrationConfirmation(data.email, data.fullName, reg._id);
+      } catch (emailError) {
+        console.error('Email sending failed:', emailError);
+        // Don't fail the registration if email fails
+      }
+
       return res.json({ success: true, message: 'Registration saved', id: reg._id });
     } catch (e) {
       console.error(e);
+      if (e.code === 11000) {
+        return res.status(400).json({ success: false, message: 'Duplicate registration detected' });
+      }
       return res.status(500).json({ success: false, message: 'Server error' });
     }
   });

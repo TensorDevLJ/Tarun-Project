@@ -2,47 +2,220 @@
 const express = require('express');
 const router = express.Router();
 const Registration = require('../models/Registration');
-const Admin = require('../models/Admin');
 const auth = require('./middleware_auth');
-const PDFDocument = require('pdfkit');
-const fs = require('fs');
-const path = require('path');
+const { generateCertificate } = require('../services/certificateService');
+const { sendApprovalNotification } = require('../services/emailService');
+const { getSignedUrl } = require('../services/s3Service');
 
-// get all registrations (protected)
-router.get('/registrations', auth, async (req,res)=>{
-  const regs = await Registration.find().sort({createdAt:-1});
-  res.json({success:true, data: regs});
+// Get all registrations with pagination and filtering
+router.get('/registrations', auth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const status = req.query.status; // 'approved', 'pending', 'all'
+    const search = req.query.search;
+    
+    let query = {};
+    
+    // Filter by approval status
+    if (status === 'approved') {
+      query.approved = true;
+    } else if (status === 'pending') {
+      query.approved = false;
+    }
+    
+    // Search functionality
+    if (search) {
+      query.$or = [
+        { fullName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { course: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    const total = await Registration.countDocuments(query);
+    const registrations = await Registration.find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .skip((page - 1) * limit);
+    
+    // Generate signed URLs for file access
+    const registrationsWithUrls = registrations.map(reg => {
+      const regObj = reg.toObject();
+      if (regObj.paymentReceiptPath) {
+        regObj.paymentReceiptUrl = getSignedUrl(regObj.paymentReceiptPath.split('/').pop());
+      }
+      if (regObj.applicationFormPath) {
+        regObj.applicationFormUrl = getSignedUrl(regObj.applicationFormPath.split('/').pop());
+      }
+      return regObj;
+    });
+    
+    res.json({
+      success: true,
+      data: registrationsWithUrls,
+      pagination: {
+        current: page,
+        pages: Math.ceil(total / limit),
+        total
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching registrations:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
 });
 
-// approve a registration
-router.post('/registrations/:id/approve', auth, async (req,res)=>{
-  const id = req.params.id;
-  const reg = await Registration.findByIdAndUpdate(id, {approved:true}, {new:true});
-  res.json({success:true, data: reg});
+// Get registration statistics
+router.get('/stats', auth, async (req, res) => {
+  try {
+    const totalRegistrations = await Registration.countDocuments();
+    const approvedRegistrations = await Registration.countDocuments({ approved: true });
+    const pendingRegistrations = await Registration.countDocuments({ approved: false });
+    
+    // Course-wise statistics
+    const courseStats = await Registration.aggregate([
+      {
+        $group: {
+          _id: '$course',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    // Monthly registration trends
+    const monthlyStats = await Registration.aggregate([
+      {
+        $group: {
+          _id: {
+            year: { $year: '$createdAt' },
+            month: { $month: '$createdAt' }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { '_id.year': -1, '_id.month': -1 } },
+      { $limit: 12 }
+    ]);
+    
+    res.json({
+      success: true,
+      data: {
+        total: totalRegistrations,
+        approved: approvedRegistrations,
+        pending: pendingRegistrations,
+        courseStats,
+        monthlyStats
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching stats:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
 });
 
-// generate certificate PDF for a registration (protected)
-router.get('/registrations/:id/certificate', auth, async (req,res)=>{
-  const id = req.params.id;
-  const reg = await Registration.findById(id);
-  if(!reg) return res.status(404).json({success:false,message:'Not found'});
+// Approve a registration
+router.post('/registrations/:id/approve', auth, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const reg = await Registration.findByIdAndUpdate(
+      id, 
+      { approved: true, approvedAt: new Date() }, 
+      { new: true }
+    );
+    
+    if (!reg) {
+      return res.status(404).json({ success: false, message: 'Registration not found' });
+    }
+    
+    // Send approval notification email
+    try {
+      await sendApprovalNotification(reg.email, reg.fullName, reg._id);
+    } catch (emailError) {
+      console.error('Email sending failed:', emailError);
+      // Don't fail the approval if email fails
+    }
+    
+    res.json({ success: true, data: reg });
+  } catch (error) {
+    console.error('Error approving registration:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
 
-  const doc = new PDFDocument({size:'A4'});
-  const filename = `certificate-${id}.pdf`;
-  res.setHeader('Content-disposition', 'attachment; filename=' + filename);
-  res.setHeader('Content-type', 'application/pdf');
+// Reject a registration
+router.post('/registrations/:id/reject', auth, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { reason } = req.body;
+    
+    const reg = await Registration.findByIdAndUpdate(
+      id, 
+      { 
+        approved: false, 
+        rejected: true, 
+        rejectionReason: reason,
+        rejectedAt: new Date() 
+      }, 
+      { new: true }
+    );
+    
+    if (!reg) {
+      return res.status(404).json({ success: false, message: 'Registration not found' });
+    }
+    
+    res.json({ success: true, data: reg });
+  } catch (error) {
+    console.error('Error rejecting registration:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
 
-  doc.fontSize(20).text('Certificate of Completion', {align:'center'});
-  doc.moveDown(2);
-  doc.fontSize(14).text(`This is to certify that`, {align:'center'});
-  doc.moveDown(1);
-  doc.fontSize(18).text(`${reg.fullName}`, {align:'center', underline:true});
-  doc.moveDown(1);
-  doc.fontSize(12).text(`has successfully registered for the course: ${reg.course}`, {align:'center'});
-  doc.moveDown(2);
-  doc.fontSize(10).text(`Date: ${new Date().toLocaleDateString()}`, {align:'right'});
-  doc.end();
-  doc.pipe(res);
+// Generate and download certificate
+router.get('/registrations/:id/certificate', auth, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const reg = await Registration.findById(id);
+    
+    if (!reg) {
+      return res.status(404).json({ success: false, message: 'Registration not found' });
+    }
+    
+    if (!reg.approved) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Certificate can only be generated for approved registrations' 
+      });
+    }
+    
+    const pdfBuffer = await generateCertificate(reg);
+    const filename = `certificate-${reg.fullName.replace(/\s+/g, '_')}-${id}.pdf`;
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(pdfBuffer);
+    
+  } catch (error) {
+    console.error('Certificate generation error:', error);
+    res.status(500).json({ success: false, message: 'Certificate generation failed' });
+  }
+});
+
+// Delete a registration
+router.delete('/registrations/:id', auth, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const reg = await Registration.findByIdAndDelete(id);
+    
+    if (!reg) {
+      return res.status(404).json({ success: false, message: 'Registration not found' });
+    }
+    
+    res.json({ success: true, message: 'Registration deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting registration:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
 });
 
 module.exports = router;
