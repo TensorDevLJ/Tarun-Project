@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // const axios = require('axios');
 
 // const verifyRecaptcha = async (req, res, next) => {
@@ -63,6 +64,13 @@ const verifyRecaptcha = async (req, res, next) => {
 
   const { recaptchaToken } = req.body;
 
+=======
+const axios = require('axios');
+
+const verifyRecaptcha = async (req, res, next) => {
+  const { recaptchaToken } = req.body;
+  
+>>>>>>> 1b75e0ecdd094faa9b6f06a445043371b5547d2a
   if (!recaptchaToken) {
     return res.status(400).json({
       success: false,
@@ -99,4 +107,8 @@ const verifyRecaptcha = async (req, res, next) => {
   }
 };
 
+<<<<<<< HEAD
 module.exports = verifyRecaptcha;
+=======
+module.exports = verifyRecaptcha;
+>>>>>>> 1b75e0ecdd094faa9b6f06a445043371b5547d2a
