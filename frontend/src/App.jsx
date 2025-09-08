@@ -2,11 +2,12 @@ import React, { useEffect, useState } from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import Website from "./pages/Website.jsx";
 import RegisterForm from "./pages/RegisterForm.jsx";
+import AdminPanel from "./pages/AdminPanel.jsx";
 import Header from "./components/Header.jsx";
 import axios from "axios";
 
 // Backend URL from environment
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 // 404 Not Found Component
 const NotFound = () => (
@@ -25,28 +26,21 @@ const NotFound = () => (
 const App = () => {
   const [users, setUsers] = useState([]);
 
-  // Example: fetch registered users from backend on app load
   useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const response = await axios.get(`${API_URL}/api/register`);
-        setUsers(response.data);
-      } catch (error) {
-        console.error("Error fetching users:", error);
-      }
-    };
-
-    fetchUsers();
+    // Initialize app
   }, []);
 
   return (
     <Router>
-      <Header />
       <Routes>
-        <Route path="/" element={<Website users={users} />} />
+        <Route path="/" element={<><Header /><Website users={users} /></>} />
         <Route
           path="/course-registration"
-          element={<RegisterForm API_URL={API_URL} />}
+          element={<><Header /><RegisterForm API_URL={API_URL} /></>}
+        />
+        <Route
+          path="/admin"
+          element={<AdminPanel />}
         />
         <Route path="*" element={<NotFound />} />
       </Routes>

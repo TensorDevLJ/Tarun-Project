@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { UploadCloud } from "lucide-react";
 import { global_classnames } from "../utils/classnames";
 import axios from "axios";
+import ReCAPTCHA from "react-google-recaptcha";
+import toast, { Toaster } from "react-hot-toast";
 
 const universities = [
   "JNTU-GV",
@@ -58,6 +60,8 @@ const RegisterForm = ({ API_URL = "http://localhost:4000" }) => {
 
   const [errors, setErrors] = useState({});
   const [message, setMessage] = useState("");
+  const [recaptchaToken, setRecaptchaToken] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const handleChange = (e) =>
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
@@ -65,40 +69,83 @@ const RegisterForm = ({ API_URL = "http://localhost:4000" }) => {
   const handleFileChange = (e) =>
     setFiles((prev) => ({ ...prev, [e.target.name]: e.target.files[0] }));
 
+  const validateEmail = (email) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const validatePhone = (phone) => {
+    const phoneRegex = /^[6-9]\d{9}$/;
+    return phoneRegex.test(phone);
+  };
+
   const validateAll = () => {
     const newErrors = {};
+    
+    // Basic validations
     if (!formData.fullName) newErrors.fullName = "Full Name is required";
+    else if (formData.fullName.length < 2) newErrors.fullName = "Full Name must be at least 2 characters";
+    else if (!/^[a-zA-Z\s]+$/.test(formData.fullName)) newErrors.fullName = "Full Name can only contain letters and spaces";
+    
     if (!formData.gender) newErrors.gender = "Gender is required";
     if (!formData.category) newErrors.category = "Category is required";
-    if (!formData.contactNumber) newErrors.contactNumber = "Contact Number is required";
-    if (!formData.email) newErrors.email = "Email is required";
+    
+    if (!formData.contactNumber) {
+      newErrors.contactNumber = "Contact Number is required";
+    } else if (!validatePhone(formData.contactNumber)) {
+      newErrors.contactNumber = "Please enter a valid 10-digit Indian mobile number";
+    }
+    
+    if (!formData.email) {
+      newErrors.email = "Email is required";
+    } else if (!validateEmail(formData.email)) {
+      newErrors.email = "Please enter a valid email address";
+    }
+    
     if (!formData.address) newErrors.address = "Address is required";
+    else if (formData.address.length < 10) newErrors.address = "Address must be at least 10 characters";
+    
     if (!formData.college) newErrors.college = "College/University is required";
     if (!formData.qualification) newErrors.qualification = "Qualification is required";
     if (!formData.course) newErrors.course = "Course is required";
     if (!formData.paymentDate) newErrors.paymentDate = "Payment Date is required";
-    if (!formData.paymentRef) newErrors.paymentRef = "Payment Reference is required";
+    
+    if (!formData.paymentRef) {
+      newErrors.paymentRef = "Payment Reference is required";
+    } else if (formData.paymentRef.length < 5) {
+      newErrors.paymentRef = "Payment Reference must be at least 5 characters";
+    }
+    
     if (!files.paymentReceipt) newErrors.paymentReceipt = "Payment Receipt is required";
     if (!files.applicationForm) newErrors.applicationForm = "Application Form is required";
+    if (!recaptchaToken) newErrors.recaptcha = "Please complete the reCAPTCHA verification";
+    
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!validateAll()) return;
+    if (!validateAll()) {
+      toast.error("Please fix the errors in the form");
+      return;
+    }
+
+    setSubmitting(true);
 
     try {
       const form = new FormData();
       Object.keys(formData).forEach((key) => form.append(key, formData[key]));
       Object.keys(files).forEach((key) => files[key] && form.append(key, files[key]));
+      form.append('recaptchaToken', recaptchaToken);
 
       const res = await axios.post(`${API_URL}/api/register`, form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
       if (res.status === 200) {
-        setMessage("Registration submitted successfully!");
+        toast.success("Registration submitted successfully! Check your email for confirmation.");
+        setMessage("Registration submitted successfully! You will receive a confirmation email shortly.");
         setFormData({
           fullName: "",
           gender: "",
@@ -114,11 +161,16 @@ const RegisterForm = ({ API_URL = "http://localhost:4000" }) => {
         });
         setFiles({ paymentReceipt: null, applicationForm: null });
         setErrors({});
+        setRecaptchaToken("");
         setTab(0);
       }
     } catch (err) {
       console.error(err);
-      setMessage("Error submitting form. Please try again.");
+      const errorMessage = err.response?.data?.message || "Error submitting form. Please try again.";
+      toast.error(errorMessage);
+      setMessage("");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -128,12 +180,18 @@ const RegisterForm = ({ API_URL = "http://localhost:4000" }) => {
   const tabs = ["Profile", "Education", "Payments"];
 
   return (
+    <>
+      <Toaster position="top-right" />
     <div className={`max-w-7xl mx-auto p-8 my-4 rounded shadow bg-[${global_classnames.background.secondary}]`}>
       <h1 className={`text-3xl font-bold mb-8 text-[${global_classnames.heading.primary}] `}>
         Emerging & Advanced Technologies Course Registration
       </h1>
 
-      {message && <p className="mb-4 text-green-600 font-semibold">{message}</p>}
+      {message && (
+        <div className="mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded">
+          {message}
+        </div>
+      )}
 
       {/* Step Indicator */}
       <div className="flex mb-6 space-x-4">
@@ -334,6 +392,18 @@ const RegisterForm = ({ API_URL = "http://localhost:4000" }) => {
           </div>
         )}
 
+        {/* reCAPTCHA */}
+        {tab === 2 && (
+          <div className="mt-6">
+            <ReCAPTCHA
+              sitekey={import.meta.env.VITE_RECAPTCHA_SITE_KEY || "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI"}
+              onChange={setRecaptchaToken}
+              onExpired={() => setRecaptchaToken("")}
+            />
+            {errors.recaptcha && <span className="text-red-500 text-sm">{errors.recaptcha}</span>}
+          </div>
+        )}
+
         {/* Navigation Buttons */}
         <div className="flex justify-between mt-6">
           <button type="button" onClick={() => setTab(Math.max(tab - 1, 0))} className={`${buttonClass} ${tab === 0 ? "opacity-50 cursor-not-allowed" : ""}`}>
@@ -345,13 +415,18 @@ const RegisterForm = ({ API_URL = "http://localhost:4000" }) => {
               Next
             </button>
           ) : (
-            <button type="submit" className={buttonClass}>
-              Submit Registration
+            <button 
+              type="submit" 
+              disabled={submitting}
+              className={`${buttonClass} ${submitting ? "opacity-50 cursor-not-allowed" : ""}`}
+            >
+              {submitting ? "Submitting..." : "Submit Registration"}
             </button>
           )}
         </div>
       </form>
     </div>
+    </>
   );
 };
 
